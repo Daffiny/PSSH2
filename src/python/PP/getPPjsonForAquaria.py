@@ -13,8 +13,7 @@ from Bio.SeqRecord import SeqRecord
 from Bio.Alphabet import generic_protein
 from Bio.Seq import Seq
 from bs4 import BeautifulSoup
-import paramiko,time
-import socket
+import socket,time,commands
 
 from enable.savage.svg.css.values import length
 from win32netcon import USER_NAME_INFOLEVEL
@@ -99,29 +98,30 @@ def queryPP(sequences):
 		return the directory the predictions are stored in
 		"""
 	# TODO
-
-	#id: time id defined from time
-	file_store_path_rost = "/tmp/Aquaria_tmp"
-	file_store_path_n03="/var/tmp/Aquaria_tmp"
+	file_store_path="/mnt/project/aquaria/public_html/snap4aquaria"
+	#id is named from time
 	id= str(time.time()).split('.')[0] #catch time
+
 	Seq_Rercord = SeqRecord(Seq(sequences, generic_protein),
 					 id=id,
 					 description=id+" submission")
 	file_name = id+".fasta"
 	print Seq_Rercord
-	full_file_name = file_store_path_rost+'/'+ file_name
-	fasta_file = SeqIO.write(Seq_Rercord, full_file_name, "fasta")
-
+	fasta_file = SeqIO.write(Seq_Rercord, file_store_path, "fasta")
+	'''
 	client = paramiko.SSHClient()
 	client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
+
 	#=========delete afterward======
+
 	hostname = 'rostssh.informatik.tu-muenchen.de'
 	user_name = 'yichunlin'
 	Password = 'daffinylin'
 
 	client.connect(hostname=hostname, port = 8574,username=user_name, password= Password)
 	channel = client.invoke_shell()
+
 	# scp file from rost to jobtest
 	channel.send("scp "+full_file_name+" "+ user_name+ "@n03:"+file_store_path_n03+"\n")
 
@@ -159,9 +159,13 @@ def queryPP(sequences):
 	while channel.recv_ready():
 		channel.recv(2048)
 
+	output = []
+	#call(["ppc_fetch --seqfile "+file_store_path_n03+"/"+file_name+" \n"])
 	channel.send("ppc_fetch --seqfile "+file_store_path_n03+"/"+file_name+" \n")
 	channel.settimeout(5)
-	output = []
+	text = commands.getoutput("ppc_fetch --seqfile "+file_store_path_n03+"/"+file_name+" \n")
+
+	buff = ''
 	try:
 		while buff.find('/mnt/'):
 			time.sleep(3)
@@ -170,6 +174,8 @@ def queryPP(sequences):
 			output.append(resp)
 	except socket.timeout:
 			print "Timeout"
+	'''
+	output = commands.getoutput("ppc_fetch --seqfile "+file_store_path+"/"+file_name+" \n")
 
 	# filter the string
 	s = output[0].split('\r\n')
@@ -178,10 +184,6 @@ def queryPP(sequences):
 	for i in range(0, len(s)-1):
 		if s[i].startswith('/mnt/',0,5):
 			filter_output.append(s[i])
-
-	#Close the connection
-	client.close()
-	print('Connection closed.')
 
 	# return dirctory
 	predictiondirectory = ""
@@ -193,41 +195,33 @@ def queryPP(sequences):
 
 
 def parse_PHDhtm_summary(predictionPath):
+
 	source = 'phdHTM'
 	description = 'Predicted transmembrane helices'
 	url = 'https://rostlab.org/owiki/index.php/PredictProtein_-_Documentation#Transmembrane_helices_.28PHDhtm.29'
-	print predictionPath
-
-
-	phdFile = open(predictionPath+'\query.phdPred','r')
-	phdText = phdFile.read()
 
 	rexp = re.compile('PHDRhtm \|[\sH]*\|')
-	l1 = rexp.findall(phdText)
-	#iterate over all entries in list and remove unwanted characters
-	l2 = l1;
-	for i,el in enumerate(l1):
-		l2[i] = el[10:-1]
-	l2joined = "".join(l2)
+
 
 	#get position ranges for which a tm was predicted
 	global  rangeList,annotationObj
 	rangeList=[]
 	annotationObj = {}
-
+	s=''
 	phd=0
 	rexp = re.compile('[H]+')
-	with open(predictionPath+'/query.phdPred','r') as f:
+	with open(predictionPath+'\query.phdPred','r') as f:
 		for line in f:
 			if line.startswith("#")|line.startswith("-"):
 				continue
 			if "PHDRhtm" in line:
+				s+=line.split('|',2)[1]
 
-				List=([(s.start() +phd, s.end()+ phd) for s in rexp.finditer(line.split('|',1)[1])])
-				rangeList.append(List)
-				#rangeList = [(m.start(0), m.end(0)) for m in rexp.finditer(phdText)]
-			phd += len(line)
-	rangeList=filter(None,rangeList)
+		p=[(s.start() +phd, s.end()+ phd) for s in rexp.finditer(s)]
+
+        for i in range(0,len(p)):
+                featureObj = {'Name': 'PHDhtm regions', 'Residues':p[i]}
+                rangeList.append(featureObj)
 
 	# first look whether there is anything in the range list!
 	if len(rangeList) > 0:
@@ -235,11 +229,10 @@ def parse_PHDhtm_summary(predictionPath):
 			'Source' : source,\
 			'URL': url,\
 			'Description': description, \
-			'Features':\
-			[{'Name':'PHDhtm regions','Residues':rangeList}]}}
-	#		JSONstr = json.dumps(obj)
-	return annotationObj
+			'Features':rangeList}}
 
+	#JSONstr = json.dumps(annotationObj)
+	return annotationObj
 
 def parse_PHDhtm_details(predictionPath):
 	"""parse out details of  PHDhtm output (transmembrane helix predictions with reliablity)"""
@@ -249,7 +242,7 @@ def parse_PHDhtm_details(predictionPath):
 	source = 'phdHTM'
 	description = 'predictions -- colored by reliablities -- for transmembrane residues and topology: inside / ouside'
 	url = 'https://rostlab.org/owiki/index.php/PredictProtein_-_Documentation#Transmembrane_helices_.28PHDhtm.29'
-	
+
 	phdFile = open(predictionPath+'/query.phdRdb','r')
 
 	# check whether any transmembrane helices ar predicted (changes output format)
@@ -273,16 +266,16 @@ def parse_PHDhtm_details(predictionPath):
 	print 'start'
 	hasHtm = False
 	for line in phdFile:
-		print line, ": "
-		if (not hasHtm): 
+		#print line, ": "
+		if (not hasHtm):
 			if htmString in line:
 				hasHtm = True
-				print 'has htm'
+				#print 'has htm'
 				continue
 			elif reHeader.match(line):
-				# we haven't found an indicator that there are Htms, but we have reached the header, 
+				# we haven't found an indicator that there are Htms, but we have reached the header,
 				# so we can stop parsing
-				print 'no htm, but header -> break'
+				#print 'no htm, but header -> break'
 				break
 		else:
 			match = reData.match(line)
@@ -309,24 +302,25 @@ def parse_PHDhtm_details(predictionPath):
 					tmhState = match.group(5)
 					if (tmhState == 'H'):
 						name += 'helix'
-						predictionStrength = match.group(3)	
+						predictionStrength = match.group(3)   #OtH
 					elif (tmhState == 'L'):
 						name += 'loop'
-						predictionStrength = match.group(4)	
+						predictionStrength = match.group(4)  #OtL
 
 #					reliablityRatio = int(match.group(2))/9.0
 					reliablityRatio = int(predictionStrength)/100.0
 #					hsvColor = hue, 1.0, reliablityRatio
-					print hue, " ", 1.0, " ", reliablityRatio
+					#print hue, " ", 1.0, " ", reliablityRatio
 					rgbColor = colorsys.hsv_to_rgb(hue, 1.0, reliablityRatio)
-					print rgbColor
+					#print rgbColor
 					reliabilityRgb = reformatColor(rgbColor)
 #					reliabilityRgb = reformatColor(colorsys.hsv_to_rgb(hue, 1.0, reliablityRatio))
 					colorHex = '#%02x%02x%02x' % reliabilityRgb
-					print colorHex
+					#print colorHex
 
 					# make a feature
-					featureObj = [{'Name': name, 'Residue':residueNumber, 'Color': colorHex}]	
+
+					featureObj = {'Name': name, 'Residue':residueNumber, 'Color': colorHex}
 					features.append(featureObj)
 
 	if (len(features) > 0):
@@ -335,14 +329,11 @@ def parse_PHDhtm_details(predictionPath):
 			'URL': url,\
 			'Description': description, \
 			'Features': features }}
-#			JSONstr = json.dumps(annotationObj)
 	else:
 		annotationObj =[]
 		print 'not annoations found!'
 
 	return annotationObj
-
-
 
 def reformatColor(color):
     return int (round (color[0] * 255)), \
@@ -361,7 +352,7 @@ def parse_prof_summary(predictionPath):
 	#get secondary structure
 	h, e = re.compile("H+"), re.compile("E+")
 	sm=0
-
+	m=''
 	SecList=[]
 	with open(predictionPath+'\query.profAscii','r') as f:
 		for line in f:
@@ -369,18 +360,31 @@ def parse_prof_summary(predictionPath):
 			if line.startswith("#")|line.startswith("|"):
 				continue
 			if " PROF_sec" in line:
+				m+=line.split('|',2)[1]
 
-				SecHList=([(s.start() +sm, s.end()+ sm) for s in h.finditer(line.split('|',1)[1])])
-				SecEList=([(s.start() +sm, s.end()+sm) for s in e.finditer(line.split('|',1)[1])])
-				SecList.append(SecHList)
-				SecList.append(SecEList)
+	SecHList=([(s.start() +sm, s.end()+ sm) for s in h.finditer(m)])
+	SecEList=([(s.start() +sm, s.end()+sm) for s in e.finditer(m)])
 
-			sm += len(line)
-	SecList=filter(None,SecList)
+	List=SecHList+SecEList
+	for i in range(0,len(List)):
+		list={'Name':'prof','Residues':List[i]}
+		SecList.append(list)
+
+		# first look whether there is anything in the range list!
+
+	if (len(SecList)) > 0:
+		secannotationObj = {'Secondary structure (Prediction by prof)':{\
+			'Source' : source,\
+			'URL': url,\
+			'Description': description, \
+			'Features':SecList}}
+
 
 	#get solvent accessibility\
 	accList=[]
 	acc=0
+	a=''
+	List=" "
 	accb, e = re.compile("b+"), re.compile("e+")
 	with open(predictionPath+'\query.profAscii','r') as f:
 		for line in f:
@@ -388,33 +392,22 @@ def parse_prof_summary(predictionPath):
 			if line.startswith("#")|line.startswith("|"):
 				continue
 			if "SUB_acc" in line:
-				accbList=([(s.start() +acc, s.end()+ acc) for s in accb.finditer(line.split('|',1)[1])])
-				acceList=([(s.start() +acc, s.end()+acc) for s in e.finditer(line.split('|',1)[1])])
-				accList.append(accbList)
-				accList.append(acceList)
+				a+=line.split('|',2)[1]
 
-			acc += len(line)
-
-	accList=filter(None,accList)
-	# first look whether there is anything in the range list!
-
-	if (len(SecList)) > 0:
-		secannotationObj = {'Secondary structure (Prediction by prof)':{\
-			'Source' : source,\
-			'URL': url,\
-			'Description': description, \
-			'Features':\
-			[{'Name':'prof','Structure':SecList}]}}
+		accbList=([(s.start() +acc, s.end()+ acc) for s in accb.finditer(a)])
+		acceList=([(s.start() +acc, s.end()+acc) for s in e.finditer(a)])
+		List=accbList+acceList
+		for i in range(0,len(List)):
+			alist={'Name':'prof','Residues':List[i]}
+			accList.append(alist)
 
 	# first look whether there is anything in the range list!
-
 	if len(accList) > 0:
 		accannotationObj = {'Solvent accessibility (Prediction by prof)':{\
 			'Source' : source,\
 			'URL': url,\
 			'Description': description, \
-			'Features':\
-			[{'Name':'prof','acc':accList}]}}
+			'Features':accList}}
 
 	#		JSONstr = json.dumps(obj)
 	return secannotationObj,accannotationObj
@@ -435,8 +428,8 @@ def parse_prof_details(predictionPath):
 #	membraneBaseColHsv = (16, 1.0, 1.0)    # orange: rgb(252, 67, 0)   hsv(16, 100%, 100%)
 #	insideBaseColHsv =   (54, 1.0, 1.0)    # yellow: rgb(255, 229, 0)  hsv(54, 100%, 100%)
 #	outsideBaseColHsv = (202, 1.0, 1.0)    # blue: rgb(0, 162, 255) hsv(202, 100%, 100%)
-	membraneHue = 16.0 /360   # orange: rgb(252, 67, 0)   hsv(16, 100%, 100%)
-	insideHue   = 54.0 /360   # yellow: rgb(255, 229, 0)  hsv(54, 100%, 100%)
+	membraneHue = 100.0 /360   # yellow: rgb(85, 255, 0)  hsv(100, 100%, 100%)
+	insideHue   = 350.0 /360   # pink: rgb(255, 0, 50)   hsv(350, 100%, 100%)
 	outsideHue = 202.0 /360   # blue: rgb(0, 162, 255) hsv(202, 100%, 100%)
 
 	features = []
@@ -473,7 +466,7 @@ def parse_prof_details(predictionPath):
 
 			predictionStrength = line[4] #RI_S
 
-			reliablityRatio = (int(predictionStrength)+1)/10.0
+			reliablityRatio = (float(predictionStrength)+1)/10.0
 			#print 'reliablityRatio:',reliablityRatio
 #					hsvColor = hue, 1.0, reliablityRatio
 
@@ -486,7 +479,7 @@ def parse_prof_details(predictionPath):
 			#print colorHex
 
 			# make a feature
-			secfeatureObj = [{'Name': name, 'Residue':residueNumber, 'Color': colorHex}]
+			secfeatureObj = {'Name': name, 'Residue':residueNumber, 'Color': colorHex, 'Description': predictionStrength}
 			features.append(secfeatureObj)
 
 
@@ -497,14 +490,14 @@ def parse_prof_details(predictionPath):
 			states = line[14] #Pbe
 			if (states == 'b'):
 				hue = outsideHue
-				accname = 'helix '
+				accname = 'buried '
 			elif (states == 'e'):
-				hue = insideHue
-				accname = 'extended '
+				hue = membraneHue
+				accname = 'exposed '
 
 			accpredictionStrength = line[9] #RI_A
 
-			accreliablityRatio = (int(accpredictionStrength)+1)/10.0
+			accreliablityRatio = (float(accpredictionStrength)+1)/10.0
 			#print 'accreliablityRatio:',accreliablityRatio
 
 			rgbColor = colorsys.hsv_to_rgb(hue, 1.0, accreliablityRatio)
@@ -515,7 +508,7 @@ def parse_prof_details(predictionPath):
 			#print acccolorHex
 
 			# make a feature
-			accfeatureObj = [{'Name': accname, 'Residue':residueNumber, 'Color': acccolorHex}]
+			accfeatureObj = {'Name': accname, 'Residue':residueNumber, 'Color': acccolorHex,'Description':accpredictionStrength}
 			accfeatures.append(accfeatureObj)
 
 	if (len(accfeatures) > 0):
@@ -527,7 +520,7 @@ def parse_prof_details(predictionPath):
 #			JSONstr = json.dumps(annotationObj)
 	else:
 		accannotationObj =[]
-		print 'not slovent accessibility annoations found!'
+		print 'not solvent accessibility annoations found!'
 
 	if (len(features) > 0):
 		secannotationObj = {'Secondary Structure (Prediction by prod)':{\
@@ -541,19 +534,13 @@ def parse_prof_details(predictionPath):
 
 	return secannotationObj,accannotationObj
 
-#def parse_isis(predictionPath):
-	# TODO
-	
-#def parse_someNA(predictionPath):
-	# TODO
-
 def parse_isis_details(predictionPath):
 	source = 'isis'
 	description = 'Predicted Binding Sites'
 	url = 'https://rostlab.org/owiki/index.php/PredictProtein_-_Documentation'
 
 	#get Protein Binding Sites
-	List=[]
+	features=[]
 	with open(predictionPath+'\query.isis','r') as f:
 		for line in f:
 			if line[0].isdigit()==True:
@@ -561,38 +548,37 @@ def parse_isis_details(predictionPath):
 				residueNumber=line[0]
 				letter = line[1]
 				number=int(line[2])
-				hue = 300.0 /360   # purple: rgb(128, 0, 128) hsv(300, 100%, 50.2%)
-				if number < 0:
-					featureObj = [{'Name': letter, 'Residue':residueNumber, 'Color': '#000000'}] # non-biding site: black
+				#membraneHue = 16.0 /360   # orange: rgb(252, 67, 0)   hsv(16, 100%, 100%)
+				#insideHue   = 54.0 /360   # yellow: rgb(255, 229, 0)  hsv(54, 100%, 100	%)
 
-				else:
-					reliablityRatio = (number)/100.0
+				if number > 0:
 
-					rgbColor = colorsys.hsv_to_rgb(hue, 1.0, reliablityRatio)
-					#print 'rgbColor',rgbColor
+					reliablityRatio = (float(number)/100.0)+0.5
+
+					rgbColor = colorsys.hsv_to_rgb(150, 1.0, reliablityRatio)
+					print 'rgbColor',rgbColor
 					accreliabilityRgb = reformatColor(rgbColor)
-
 					acccolorHex = '#%02x%02x%02x' % accreliabilityRgb
 
+					desc = 'protein binding site, ISIS score: '+ str(number)
 					# make a feature
-					featureObj = [{'Name': letter, 'Residue':residueNumber, 'Color': acccolorHex}]
-				List.append(featureObj)
+					featureObj = {'Name': "Binding site", 'Residue':residueNumber, 'Color': acccolorHex, 'Description': desc}
+					features.append(featureObj)
 
 
 	# first look whether there is anything in the range list!
 
-	if (len(List)) > 0:
+	if (len(features)) > 0:
 		annotationObj = {'Binding Sites (Prediction by isis)':{\
 			'Source' : source,\
 			'URL': url,\
 			'Description': description, \
-			'Features':\
-			[{'Name':'isis','Structure':List}]}}
+			'Features':features}}
 
 	#		JSONstr = json.dumps(obj)
 	return annotationObj
 
-def parse_mdisorder_summary(predictionPath):
+def parse_mdisorder_details(predictionPath):
 	source = 'mdisorder'
 	description = 'Predicted Protein Disorder'
 	url = 'https://rostlab.org/owiki/index.php/PredictProtein_-_Documentation'
@@ -608,23 +594,23 @@ def parse_mdisorder_summary(predictionPath):
 			line=line[0].split("\t")
 			if line[0].isdigit()==True:
 
-				if line[10] == "D\n":
+				if line[10] == "D\n": #MD2st
 					residueNumber=line[0]
 					letter = line[1]
-					number=int(line[9])
+					number=int(line[9]) #MD_rel
 					hue = 54.0 /360   # yellow: rgb(255, 229, 0)  hsv(54, 100%, 100%)
 
-					reliablityRatio = (number+1)/10.0 #avoid 0/10
+					reliablityRatio = float(number+1)/10.0 #avoid 0/10
 
-					rgbColor = colorsys.hsv_to_rgb(hue, 1.0, reliablityRatio)
+					rgbColor = colorsys.hsv_to_rgb(float(hue)+1, 1.0, reliablityRatio+0.3)
 					#print 'rgbColor',rgbColor
 					reliabilityRgb = reformatColor(rgbColor)
 
 					colorHex = '#%02x%02x%02x' % reliabilityRgb
 
+					desc = "Disordered: "+ str(number)
 					# make a feature
-					featureObj = [{'Name': letter, 'Residue':residueNumber, 'Color': colorHex}]
-
+					featureObj = {'Name': "Disordered", 'Residue':residueNumber, 'Color': colorHex,"Description": desc}
 					List.append(featureObj)
 
 
@@ -635,13 +621,12 @@ def parse_mdisorder_summary(predictionPath):
 			'Source' : source,\
 			'URL': url,\
 			'Description': description, \
-			'Features':\
-			[{'Name':'mdisorder','Structure':List}]}}
+			'Features':List}}
 
 	#		JSONstr = json.dumps(obj)
 	return diorderObj
 
-def parse_disulfinder_summary(predictionPath):
+def parse_disulfinder_details(predictionPath):
 	source = 'disulfinder'
 	description = 'Predicted Disulphide Bridge'
 	url = 'https://rostlab.org/owiki/index.php/PredictProtein_-_Documentation'
@@ -674,19 +659,28 @@ def parse_disulfinder_summary(predictionPath):
 
 	for i in range(0,(len(AAList))):
 		if DB_stateList[i] != " ":
-
 			if DB_stateList[i] =="0": #0=not disulfide bonded
-				hue = 16.0 /360   # orange: rgb(252, 67, 0)   hsv(16, 100%, 100%)
+				hue = float(60*((int(DB_confList[i]))/2))/360
+				#hue = 54.0 /360   # yellow: rgb(255, 229, 0)  hsv(54, 100%, 100%)
+				desc="Not Disulfide bonded: " +DB_confList[i]
 			elif DB_stateList[i] =="1":  #1=disulfide bonded
-				hue = 202.0 /360   # blue: rgb(0, 162, 255) hsv(202, 100%, 100%)
+				hue = 0.0   # Gray: rgb(128,128,128)	 hsv(0, 0%, 50%)
+				desc="Disulfide bonded: " + DB_confList[i]
 
-			reliablityRatio = (int(DB_confList[i])+1)/10.0 #avoid 0/10
+			hue=float("{0:.1f}".format(hue))
+			#	reliablityRatio = float(number+1)/10.0 #avoid 0/10
+			if float(DB_confList[i])%2 == 0:
+				reliablityRatio = 0.5 # 0.5
+			else:
+				reliablityRatio = 1.0 # 1
 
 			rgbColor = colorsys.hsv_to_rgb(hue, 1.0, reliablityRatio)
 			print 'rgbColor',rgbColor
 			accreliabilityRgb = reformatColor(rgbColor)
 			acccolorHex = '#%02x%02x%02x' % accreliabilityRgb
-			featureObj = [{'Name': AAList[i], 'Residue':i+1, 'Color': acccolorHex}]
+			featureObj = {'Name': "Disulphide Bridges", 'Residue':i+1, 'Color': acccolorHex,
+						  "Description": desc}
+
 			List.append(featureObj)
 
 	# first look whether there is anything in the range list!
@@ -696,13 +690,27 @@ def parse_disulfinder_summary(predictionPath):
 			'Source' : source,\
 			'URL': url,\
 			'Description': description, \
-			'Features':\
-			[{'Name':'disulfinder','Structure':List}]}}
+			'Features':List}}
 
 	#		JSONstr = json.dumps(obj)
 	return disulfinderObj
 
+def pare_all_details(path):
 
+	dic1=parse_PHDhtm_details(path)
+	dic2,dic3 = parse_prof_details(path)
+	dic4=parse_isis_details(path)
+	dic5=parse_mdisorder_details(path)
+	dic6=parse_disulfinder_details(path)
+
+	all_dic=dic1.copy()
+	all_dic.update(dic2)
+	all_dic.update(dic3)
+	all_dic.update(dic4)
+	all_dic.update(dic5)
+	all_dic.update(dic6)
+
+	return all_dic
 if __name__ == "__main__":
         main(sys.argv[1:])
 
